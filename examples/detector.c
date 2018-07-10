@@ -625,7 +625,7 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
     }
 }
 
-void testfolder_detector(char *datacfg, char *cfgfile, char *weightfile, char *foldername, char *outfolder, float thresh, float hier_thresh, int dont_show)
+void testfolder_detector(char *datacfg, char *cfgfile, char *weightfile, char *foldername, char *outfolder, float thresh, float hier_thresh)
 {
 	list *options = read_data_cfg(datacfg);
 	char *name_list = option_find_str(options, "names", "data/names.list");
@@ -636,8 +636,6 @@ void testfolder_detector(char *datacfg, char *cfgfile, char *weightfile, char *f
 
 	srand(2222222);
 	double time;
-	char buff[256];
-	int j;
 	float nms = .45;
     list *l = get_file_list(foldername, ".jpg");
     node *n = l->front;

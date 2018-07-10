@@ -7,6 +7,7 @@ int list_find(list *l, void *val);
 
 void list_insert(list *, void *);
 
+void *list_pop(list *l);
 
 void free_list_contents(list *l);
 

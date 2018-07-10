@@ -1,7 +1,7 @@
-GPU=0
-CUDNN=0
-OPENCV=0
-OPENMP=0
+GPU=1
+CUDNN=1
+OPENCV=1
+OPENMP=1
 DEBUG=0
 
 ARCH= -gencode arch=compute_30,code=sm_30 \
@@ -12,6 +12,10 @@ ARCH= -gencode arch=compute_30,code=sm_30 \
 
 # This is what I use, uncomment if you know your arch and want to specify
 # ARCH= -gencode arch=compute_52,code=compute_52
+
+# the compute capacity of jetson tx2 is 6.2
+# https://developer.nvidia.com/cuda-gpus
+ARCH= -gencode arch=compute_62,code=[sm_62,compute_62]
 
 VPATH=./src/:./examples
 SLIB=libdarknet.so

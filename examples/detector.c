@@ -636,6 +636,7 @@ void testfolder_detector(char *datacfg, char *cfgfile, char *weightfile, char *f
 
 	srand(2222222);
 	double time;
+    char buff[256];
 	float nms = .45;
     list *l = get_file_list(foldername, ".jpg");
     node *n = l->front;
@@ -663,11 +664,19 @@ void testfolder_detector(char *datacfg, char *cfgfile, char *weightfile, char *f
         if (nms) do_nms_sort(dets, nboxes, l.classes, nms);
         draw_detections(im, dets, nboxes, thresh, names, NULL, l.classes);
         free_detections(dets, nboxes);
-        *strstr(input, ".jpg") = 0;
-        save_image(im, input);
+        char *output = strrchr(input, '/');
+        if (output) output++;
+        else output = input;
+        *strstr(output, ".jpg") = 0;
+        if (!outfolder) outfolder = "out";
+        snprintf(buff, sizeof(buff), "%s/%s", outfolder, output);
+        save_image(im, buff);
         free_image(im);
         free_image(sized);
+        n = n->next;
     }
+    free_list_contents(l);
+    free_list(l);
 }
 
 /*
@@ -883,7 +892,10 @@ void run_detector(int argc, char **argv)
     char *cfg = argv[4];
     char *weights = (argc > 5) ? argv[5] : 0;
     char *filename = (argc > 6) ? argv[6]: 0;
+    char *foldername = filename;
+    char *outfolder = (argc > 7) ? argv[7]: 0;
     if(0==strcmp(argv[2], "test")) test_detector(datacfg, cfg, weights, filename, thresh, hier_thresh, outfile, fullscreen);
+    else if (0==strcmp(argv[2], "testfolder")) testfolder_detector(datacfg, cfg, weights, foldername, outfolder, thresh, hier_thresh);
     else if(0==strcmp(argv[2], "train")) train_detector(datacfg, cfg, weights, gpus, ngpus, clear);
     else if(0==strcmp(argv[2], "valid")) validate_detector(datacfg, cfg, weights, outfile);
     else if(0==strcmp(argv[2], "valid2")) validate_detector_flip(datacfg, cfg, weights, outfile);

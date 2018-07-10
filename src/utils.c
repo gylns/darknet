@@ -741,7 +741,7 @@ list *get_file_list(const char *folder, const char *ext)
             while ((ent = readdir(dir)) != NULL)
             {
                 char tmp[256];
-                snprintf(tmp, sizeof(tmp), "%s/%s", folder, ent->d_name);
+                snprintf(tmp, sizeof(tmp), "%s/%s", d, ent->d_name);
                 if (ent->d_type == DT_DIR)
                 {
                     if (strcmp(ent->d_name, ".") && strcmp(ent->d_name, ".."))

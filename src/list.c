@@ -33,6 +33,7 @@ void *list_pop(list *l){
     if(l->back) l->back->next = 0;
     free(b);
     --l->size;
+	if (l->back == 0) l->front = 0;
     
     return val;
 }

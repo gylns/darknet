@@ -10,6 +10,7 @@
 #include <sys/time.h>
 
 #include "utils.h"
+#include <dirent.h>
 
 
 /*
@@ -724,3 +725,38 @@ float **one_hot_encode(float *a, int n, int k)
     return t;
 }
 
+list *get_file_list(const char *folder, const char *ext)
+{
+    list *l = make_list();
+    list *dl = make_list();
+
+    list_insert(dl, strdup(folder));
+    char *d;
+    while ((d = list_pop(dl)) != NULL)
+    {
+        DIR *dir = opendir(d);
+        if (dir)
+        {
+            struct dirent *ent;
+            while ((ent = readdir(dir)) != NULL)
+            {
+                char tmp[256];
+                snprintf(tmp, sizeof(tmp), "%s/%s", folder, ent->d_name);
+                if (ent->d_type == DT_DIR)
+                {
+                    if (strcmp(ent->d_name, ".") && strcmp(ent->d_name, ".."))
+                        list_insert(dl, strdup(tmp));
+                }
+                else if (ent->d_type == DT_REG)
+                {
+                    if (!ext || strstr(ent->d_name, ext))
+                        list_insert(l, strdup(tmp));
+                }
+            }
+            closedir(dir);
+        }
+        free(d);
+   }
+   free_list(dl);
+   return l;
+}

@@ -632,51 +632,93 @@ void testfolder_detector(char *datacfg, char *cfgfile, char *weightfile, char *f
 	char **names = get_labels(name_list);
 
 	network *net = load_network(cfgfile, weightfile, 0);
-    set_batch_network(net, 1);
+    printf("network batch: %d\n", net->batch);
 
 	srand(2222222);
 	double time;
     char buff[256];
 	float nms = .45;
-    list *l = get_file_list(foldername, ".jpg");
-    node *n = l->front;
+    list *img_list = get_file_list(foldername, ".jpg");
+    node *n = img_list->front;
+    node *n_start;
+    int b = 0;
+    int i;
+    image batch_input;
+    image *batch_im = calloc(net->batch, sizeof(image));
+    
+    batch_input = make_image(net->w, net->h, net->c * net->batch);
     while (n)
     {
         char *input = n->val;
-        image im = load_image_color(input, 0, 0);
-        image sized = letterbox_image(im, net->w, net->h);
+        image sized;
+        layer l;
+        float *X;
+        node *tn;
 
+        if (b == 0) {
+            n_start = n;
+            batch_im[b] = load_image_color(input, 0, 0);
+        }
+        else {
+            batch_im[b] = load_image_color(input, batch_im[0].w, batch_im[0].h);
+        }
+
+        sized = letterbox_image(batch_im[b], net->w, net->h);
         //image sized = resize_image(im, net->w, net->h);
         //image sized2 = resize_max(im, net->w);
         //image sized = crop_image(sized2, -((net->w - sized2.w)/2), -((net->h - sized2.h)/2), net->w, net->h);
         //resize_network(net, sized.w, sized.h);
-        layer l = net->layers[net->n-1];
+        copy_cpu(net->w * net->h * net->c, sized.data, 1, batch_input.data + net->w * net->h * net->c * b, 1);
+        free_image(sized);
 
+        b++;
+        if (b < net->batch) {
+            n = n->next;
+            continue;
+        }
 
-        float *X = sized.data;
+        l = net->layers[net->n-1];
+        X = batch_input.data;
         time=what_time_is_it_now();
         network_predict(net, X);
         printf("%s: Predicted in %f seconds.\n", input, what_time_is_it_now()-time);
-        int nboxes = 0;
-        detection *dets = get_network_boxes(net, im.w, im.h, thresh, hier_thresh, 0, 1, &nboxes);
-        //printf("%d\n", nboxes);
-        //if (nms) do_nms_obj(boxes, probs, l.w*l.h*l.n, l.classes, nms);
-        if (nms) do_nms_sort(dets, nboxes, l.classes, nms);
-        draw_detections(im, dets, nboxes, thresh, names, NULL, l.classes);
-        free_detections(dets, nboxes);
-        char *output = strrchr(input, '/');
-        if (output) output++;
-        else output = input;
-        *strstr(output, ".jpg") = 0;
-        if (!outfolder) outfolder = "out";
-        snprintf(buff, sizeof(buff), "%s/%s", outfolder, output);
-        save_image(im, buff);
-        free_image(im);
-        free_image(sized);
+
+        tn = n_start;
+        for (i=0; i<net->batch; i++)
+        {
+            int nboxes = 0;
+            input = tn->val;
+            detection *dets = get_network_boxes_batch(net, i, batch_im[0].w, batch_im[0].h, thresh, hier_thresh, 0, 1, &nboxes);
+            //printf("%d\n", nboxes);
+            //if (nms) do_nms_obj(boxes, probs, l.w*l.h*l.n, l.classes, nms);
+            if (nms) do_nms_sort(dets, nboxes, l.classes, nms);
+            draw_detections(batch_im[i], dets, nboxes, thresh, names, NULL, l.classes);
+            free_detections(dets, nboxes);
+
+            char *output = strrchr(input, '/');
+            if (output) output++;
+            else output = input;
+            *strstr(output, ".jpg") = 0;
+            if (!outfolder) outfolder = "out";
+            snprintf(buff, sizeof(buff), "%s/%s", outfolder, output);
+            save_image(batch_im[i], buff);
+            free_image(batch_im[i]);
+            batch_im[i].data = 0;
+            tn = tn->next;
+        }
+
+        // next image
         n = n->next;
+        b = 0;
     }
-    free_list_contents(l);
-    free_list(l);
+    free_image(batch_input);
+    
+    for (i=0; i<net->batch; i++)
+        free_image(batch_im[i]);
+
+    free(batch_im);
+    free_list_contents(img_list);
+    free_list(img_list);
 }
 
 /*

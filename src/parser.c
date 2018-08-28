@@ -721,6 +721,7 @@ network parse_network_cfg_custom(char *filename, int batch)
     params.batch = net.batch;
     params.time_steps = net.time_steps;
     params.net = net;
+	printf("gpu_index: %d, batch: %d\n", gpu_index, net.batch);
 
     float bflops = 0;
     size_t workspace_size = 0;

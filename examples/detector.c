@@ -625,100 +625,195 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
     }
 }
 
-void testfolder_detector(char *datacfg, char *cfgfile, char *weightfile, char *foldername, char *outfolder, float thresh, float hier_thresh)
+typedef struct load_image_args {
+    int w, h, c;
+    int batch;
+    char **paths;
+    int m;
+    int n;
+    int *num;
+    image **batch_im;
+    float **data;
+}load_image_args;
+
+typedef struct predict_args {
+    network *net;
+    char **paths;
+    int n;
+    float thresh;
+    float hier_thresh;
+    float nms;
+    char **names;
+    char *outfolder;
+}predict_args;
+
+int load_batch_images(load_image_args *args)
+{
+    int i;
+    int w = args->w;
+    int h = args->h;
+    int c = args->c;
+    int b = args->batch;
+    int m = args->m;
+    int n = args->n;
+    char **paths = args->paths;
+
+    if (args->num) *args->num = 0;
+    if (args->batch_im) *args->batch_im = 0;
+    if (args->data) *args->data = 0;
+
+    if (m >= n) return 0;
+    double time = what_time_is_it_now();
+    image *batch_im = calloc(b, sizeof(image));
+    float *data = calloc(w*h*c*b, sizeof(float));
+    for (i = 0; i < b && m + i < n; ++i) {
+        if (i == 0)
+            batch_im[i] = load_image_color(paths[m + i], 0, 0);
+        else
+            batch_im[i] = load_image_color(paths[m + i], batch_im[0].w, batch_im[0].h);
+        image sized = letterbox_image(batch_im[i], w, h);
+        copy_cpu(w * h * c, sized.data, 1, data + w * h * c * i, 1);
+        free_image(sized);
+    }
+    if (args->num) *args->num = i;
+    if (args->batch_im) *args->batch_im = batch_im;
+    if (args->data) *args->data = data;
+    printf("%d images loaded in %f seconds.\n", i, what_time_is_it_now()-time);
+    return i;
+}
+
+void *load_batch_thread(void *ptr)
+{
+    load_image_args *args = (load_image_args *)ptr;
+    load_batch_images(args);
+    return 0;
+}
+
+void network_predict_images(predict_args *args)
+{
+    int m = 0;
+    network *net = args->net;
+    char **paths = args->paths;
+    int n= args->n;
+    int load_num;
+    image *load_im;
+    float *load_data;
+
+    load_image_args load_args;
+
+    load_args.w = net->w;
+    load_args.h = net->h;
+    load_args.c = net->c;
+    load_args.batch = net->batch;
+    load_args.paths = paths;
+    load_args.m = m;
+    load_args.n = n;
+    load_args.num = &load_num;
+    load_args.batch_im = &load_im;
+    load_args.data = &load_data;
+
+    pthread_t load_thread;
+    if(pthread_create(&load_thread, 0, load_batch_thread, &load_args)) error("Load thread creation failed");
+
+    char buff[256];
+    for (; m < n;) {
+        pthread_join(load_thread, 0);
+
+        int num = load_num;
+        image *batch_im = load_im;
+        float *X = load_data;
+
+        load_args.m += load_num;
+        if(pthread_create(&load_thread, 0, load_batch_thread, &load_args)) error("Load thread creation failed");
+
+        // predict
+        double time=what_time_is_it_now();
+        network_predict(net, X);
+        printf("%d images predict in %f seconds.\n", num, what_time_is_it_now()-time);
+
+        int b;
+        layer l = net->layers[net->n-1];
+        for (b = 0; b < num; ++b) {
+            int nboxes = 0;
+            detection *dets = get_network_boxes_batch(net, b, batch_im[0].w, batch_im[0].h, args->thresh, args->hier_thresh, 0, 1, &nboxes);
+            if (args->nms) do_nms_sort(dets, nboxes, l.classes, args->nms);
+            draw_detections(batch_im[b], dets, nboxes, args->thresh, args->names, NULL, l.classes);
+            printf("[%d/%d]: %d boxes\n", b+1, num, nboxes);
+            free_detections(dets, nboxes);
+
+            // save detection results
+            char *output = strrchr(paths[m+b], '/');
+            if (output) output++;
+            else output = paths[m+b];
+            *strstr(output, ".jpg") = 0;
+            if (!args->outfolder) args->outfolder = "out";
+            snprintf(buff, sizeof(buff), "%s/%s", args->outfolder, output);
+            save_image(batch_im[b], buff);
+            free_image(batch_im[b]);
+        }
+        free(batch_im);
+        free(X);
+        m += num;
+    }
+}
+
+void *predict_thread(void *ptr)
+{
+    predict_args *args = (predict_args *)ptr;
+    network_predict_images(args);
+    return 0;
+}
+
+void testfolder_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, int ngpus, char *foldername, char *outfolder, float thresh, float hier_thresh, float nms)
 {
 	list *options = read_data_cfg(datacfg);
 	char *name_list = option_find_str(options, "names", "data/names.list");
 	char **names = get_labels(name_list);
 
-	network *net = load_network(cfgfile, weightfile, 0);
-    printf("network batch: %d\n", net->batch);
+    network **nets = calloc(ngpus, sizeof(network));
+    int i;
+    for (i = 0; i < ngpus; ++i) {
+#ifdef GPU
+        cuda_set_device(gpus[i]);
+#endif
+	    nets[i] = load_network(cfgfile, weightfile, 0);
+    }
 
 	srand(2222222);
-	double time;
-    char buff[256];
-	float nms = .45;
-    list *img_list = get_file_list(foldername, ".jpg");
-    node *n = img_list->front;
-    node *n_start;
-    int b = 0;
-    int i;
-    image batch_input;
-    image *batch_im = calloc(net->batch, sizeof(image));
+    network *net = nets[0];
+    printf("network batch: %d\n", net->batch);
     
-    batch_input = make_image(net->w, net->h, net->c * net->batch);
-    while (n)
-    {
-        char *input = n->val;
-        image sized;
-        layer l;
-        float *X;
-        node *tn;
+    list *plist = get_file_list(foldername, ".jpg");
+    char **paths = (char **)list_to_array(plist);
 
-        if (b == 0) {
-            n_start = n;
-            batch_im[b] = load_image_color(input, 0, 0);
-        }
-        else {
-            batch_im[b] = load_image_color(input, batch_im[0].w, batch_im[0].h);
-        }
+    pthread_t *threads = (pthread_t *) calloc(ngpus, sizeof(pthread_t));
+    predict_args *args = (predict_args *) calloc(ngpus, sizeof(predict_args));
 
-        sized = letterbox_image(batch_im[b], net->w, net->h);
-        //image sized = resize_image(im, net->w, net->h);
-        //image sized2 = resize_max(im, net->w);
-        //image sized = crop_image(sized2, -((net->w - sized2.w)/2), -((net->h - sized2.h)/2), net->w, net->h);
-        //resize_network(net, sized.w, sized.h);
-        copy_cpu(net->w * net->h * net->c, sized.data, 1, batch_input.data + net->w * net->h * net->c * b, 1);
-        free_image(sized);
-
-        b++;
-        if (b < net->batch) {
-            n = n->next;
-            continue;
-        }
-
-        l = net->layers[net->n-1];
-        X = batch_input.data;
-        time=what_time_is_it_now();
-        network_predict(net, X);
-        printf("%s: Predicted in %f seconds.\n", input, what_time_is_it_now()-time);
-
-        tn = n_start;
-        for (i=0; i<net->batch; i++)
-        {
-            int nboxes = 0;
-            input = tn->val;
-            detection *dets = get_network_boxes_batch(net, i, batch_im[0].w, batch_im[0].h, thresh, hier_thresh, 0, 1, &nboxes);
-            //printf("%d\n", nboxes);
-            //if (nms) do_nms_obj(boxes, probs, l.w*l.h*l.n, l.classes, nms);
-            if (nms) do_nms_sort(dets, nboxes, l.classes, nms);
-            draw_detections(batch_im[i], dets, nboxes, thresh, names, NULL, l.classes);
-            free_detections(dets, nboxes);
-
-            char *output = strrchr(input, '/');
-            if (output) output++;
-            else output = input;
-            *strstr(output, ".jpg") = 0;
-            if (!outfolder) outfolder = "out";
-            snprintf(buff, sizeof(buff), "%s/%s", outfolder, output);
-            save_image(batch_im[i], buff);
-            free_image(batch_im[i]);
-            batch_im[i].data = 0;
-            tn = tn->next;
-        }
-
-        // next image
-        n = n->next;
-        b = 0;
+    int num = plist->size / ngpus;
+    int m = 0;
+    int n;
+    for (i = 0; i < ngpus; ++i) {
+        args[i].net = nets[i];
+        args[i].paths = &paths[m];
+        n = i < ngpus - 1 ? num : plist->size - m;
+        args[i].n = n;
+        args[i].thresh = thresh;
+        args[i].hier_thresh = hier_thresh;
+        args[i].nms = nms;
+        args[i].names = names;
+        args[i].outfolder = outfolder;
+        m += n;
+        if(pthread_create(&threads[i], 0, predict_thread, &args[i])) error("Predict thread creation failed");
     }
-    free_image(batch_input);
-    
-    for (i=0; i<net->batch; i++)
-        free_image(batch_im[i]);
 
-    free(batch_im);
-    free_list_contents(img_list);
-    free_list(img_list);
+    for (i = 0; i < ngpus; ++i) {
+        pthread_join(threads[i], 0);
+    }
+    free(args);
+    free(threads);
+    free(paths);
+    free_list_contents(plist);
+    free_list(plist);
 }
 
 /*
@@ -928,6 +1023,7 @@ void run_detector(int argc, char **argv)
     int width = find_int_arg(argc, argv, "-w", 0);
     int height = find_int_arg(argc, argv, "-h", 0);
     int fps = find_int_arg(argc, argv, "-fps", 0);
+    float nms = find_float_arg(argc, argv, "-nms", .45);
     //int class = find_int_arg(argc, argv, "-class", 0);
 
     char *datacfg = argv[3];
@@ -937,7 +1033,7 @@ void run_detector(int argc, char **argv)
     char *foldername = filename;
     char *outfolder = (argc > 7) ? argv[7]: 0;
     if(0==strcmp(argv[2], "test")) test_detector(datacfg, cfg, weights, filename, thresh, hier_thresh, outfile, fullscreen);
-    else if (0==strcmp(argv[2], "testfolder")) testfolder_detector(datacfg, cfg, weights, foldername, outfolder, thresh, hier_thresh);
+    else if (0==strcmp(argv[2], "testfolder")) testfolder_detector(datacfg, cfg, weights, gpus, ngpus, foldername, outfolder, thresh, hier_thresh, nms);
     else if(0==strcmp(argv[2], "train")) train_detector(datacfg, cfg, weights, gpus, ngpus, clear);
     else if(0==strcmp(argv[2], "valid")) validate_detector(datacfg, cfg, weights, outfile);
     else if(0==strcmp(argv[2], "valid2")) validate_detector_flip(datacfg, cfg, weights, outfile);

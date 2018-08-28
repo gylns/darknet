@@ -588,7 +588,7 @@ void fill_network_boxes(network *net, int w, int h, float thresh, float hier, in
     }
 }
 
-void fill_network_boxes_b(network *net, int b, int w, int h, float thresh, float hier, int *map, int relative, detection *dets)
+void fill_network_boxes_batch(network *net, int b, int w, int h, float thresh, float hier, int *map, int relative, detection *dets)
 {
     int j;
     for(j = 0; j < net->n; ++j){
@@ -610,7 +610,7 @@ detection *get_network_boxes(network *net, int w, int h, float thresh, float hie
 detection *get_network_boxes_batch(network *net, int b, int w, int h, float thresh, float hier, int *map, int relative, int *num)
 {
     detection *dets = make_network_boxes_batch(net, b, thresh, num);
-    fill_network_boxes_b(net, b, w, h, thresh, hier, map, relative, dets);
+    fill_network_boxes_batch(net, b, w, h, thresh, hier, map, relative, dets);
     return dets;
 }
 

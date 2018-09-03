@@ -188,5 +188,8 @@ void cuda_pull_array(float *x_gpu, float *x, size_t n)
 
 #else // GPU
 #include "cuda.h"
-void cuda_set_device(int n) {}
+#include <stdio.h>
+void cuda_set_device(int n) {
+    printf("You are using CPU version!\n");
+}
 #endif // GPU

@@ -708,6 +708,8 @@ float *network_predict_image(network *net, image im)
 
 int network_width(network *net) { return net->w; }
 int network_height(network *net) { return net->h; }
+int network_channel(network *net) { return net->c; }
+int network_batch(network *net) { return net->batch; }
 
 matrix network_predict_data_multi(network net, data test, int n)
 {

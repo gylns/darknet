@@ -43,6 +43,18 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
     float avg_loss = -1;
     network *nets = calloc(ngpus, sizeof(network));
 
+	char *cfgbuf = 0;
+	size_t cfgsize = 0;
+	if (cfgfile)
+	{
+		FILE *f = fopen(cfgfile, "rb");
+		fseek(f, 0, SEEK_END);
+		cfgsize = ftell(f);
+		cfgbuf = malloc(sizeof(char) * cfgsize);
+		fseek(f, 0, SEEK_SET);
+		fread(cfgbuf, 1, cfgsize, f);
+	}
+
     srand(time(0));
     int seed = rand();
     int i;
@@ -210,7 +222,7 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
 #endif
             char buff[256];
             sprintf(buff, "%s/%s_%d.weights", backup_directory, base, i);
-            save_weights(net, buff);
+            save_weights_cfgbuf(net, buff, cfgbuf, cfgsize);
         }
         free_data(train);
     }
@@ -227,6 +239,8 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
 #endif
 
     // free memory
+	free(cfgbuf);
+
     pthread_join(load_thread, 0);
     free_data(buffer);
 

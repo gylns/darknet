@@ -699,174 +699,213 @@ network parse_network_cfg(char *filename)
     return parse_network_cfg_custom(filename, 0);
 }
 
+network parse_network_sections(list *sections, int batch)
+{
+	node *n = sections->front;
+	if (!n) error("Config file has no sections");
+	network net = make_network(sections->size - 1);
+	net.gpu_index = gpu_index;
+	size_params params;
+
+	section *s = (section *)n->val;
+	list *options = s->options;
+	if (!is_network(s)) error("First section must be [net] or [network]");
+	parse_net_options(options, &net);
+
+	params.h = net.h;
+	params.w = net.w;
+	params.c = net.c;
+	params.inputs = net.inputs;
+	if (batch > 0) net.batch = batch;
+	params.batch = net.batch;
+	params.time_steps = net.time_steps;
+	params.net = net;
+	printf("gpu_index: %d, batch: %d\n", gpu_index, net.batch);
+
+	float bflops = 0;
+	size_t workspace_size = 0;
+	n = n->next;
+	int count = 0;
+	free_section(s);
+	fprintf(stderr, "layer     filters    size              input                output\n");
+	while (n) {
+		params.index = count;
+		fprintf(stderr, "%4d ", count);
+		s = (section *)n->val;
+		options = s->options;
+		layer l = { 0 };
+		LAYER_TYPE lt = string_to_layer_type(s->type);
+		if (lt == CONVOLUTIONAL) {
+			l = parse_convolutional(options, params);
+		}
+		else if (lt == LOCAL) {
+			l = parse_local(options, params);
+		}
+		else if (lt == ACTIVE) {
+			l = parse_activation(options, params);
+		}
+		else if (lt == RNN) {
+			l = parse_rnn(options, params);
+		}
+		else if (lt == GRU) {
+			l = parse_gru(options, params);
+		}
+		else if (lt == CRNN) {
+			l = parse_crnn(options, params);
+		}
+		else if (lt == CONNECTED) {
+			l = parse_connected(options, params);
+		}
+		else if (lt == CROP) {
+			l = parse_crop(options, params);
+		}
+		else if (lt == COST) {
+			l = parse_cost(options, params);
+		}
+		else if (lt == REGION) {
+			l = parse_region(options, params);
+		}
+		else if (lt == YOLO) {
+			l = parse_yolo(options, params);
+		}
+		else if (lt == DETECTION) {
+			l = parse_detection(options, params);
+		}
+		else if (lt == SOFTMAX) {
+			l = parse_softmax(options, params);
+			net.hierarchy = l.softmax_tree;
+		}
+		else if (lt == NORMALIZATION) {
+			l = parse_normalization(options, params);
+		}
+		else if (lt == BATCHNORM) {
+			l = parse_batchnorm(options, params);
+		}
+		else if (lt == MAXPOOL) {
+			l = parse_maxpool(options, params);
+		}
+		else if (lt == REORG) {
+			l = parse_reorg(options, params);
+		}
+		else if (lt == REORG_OLD) {
+			l = parse_reorg_old(options, params);
+		}
+		else if (lt == AVGPOOL) {
+			l = parse_avgpool(options, params);
+		}
+		else if (lt == ROUTE) {
+			l = parse_route(options, params, net);
+		}
+		else if (lt == UPSAMPLE) {
+			l = parse_upsample(options, params, net);
+		}
+		else if (lt == SHORTCUT) {
+			l = parse_shortcut(options, params, net);
+		}
+		else if (lt == DROPOUT) {
+			l = parse_dropout(options, params);
+			l.output = net.layers[count - 1].output;
+			l.delta = net.layers[count - 1].delta;
+#ifdef GPU
+			l.output_gpu = net.layers[count - 1].output_gpu;
+			l.delta_gpu = net.layers[count - 1].delta_gpu;
+#endif
+		}
+		else {
+			fprintf(stderr, "Type not recognized: %s\n", s->type);
+		}
+		l.onlyforward = option_find_int_quiet(options, "onlyforward", 0);
+		l.stopbackward = option_find_int_quiet(options, "stopbackward", 0);
+		l.dontload = option_find_int_quiet(options, "dontload", 0);
+		l.dontloadscales = option_find_int_quiet(options, "dontloadscales", 0);
+		option_unused(options);
+		net.layers[count] = l;
+		if (l.workspace_size > workspace_size) workspace_size = l.workspace_size;
+		free_section(s);
+		n = n->next;
+		++count;
+		if (n) {
+			params.h = l.out_h;
+			params.w = l.out_w;
+			params.c = l.out_c;
+			params.inputs = l.outputs;
+		}
+		if (l.bflops > 0) bflops += l.bflops;
+	}
+	free_list(sections);
+	net.outputs = get_network_output_size(net);
+	net.output = get_network_output(net);
+	printf("Total BFLOPS %5.3f \n", bflops);
+	if (workspace_size) {
+		//printf("%ld\n", workspace_size);
+#ifdef GPU
+		if (gpu_index >= 0) {
+			net.workspace = cuda_make_array(0, workspace_size / sizeof(float) + 1);
+		}
+		else {
+			net.workspace = calloc(1, workspace_size);
+		}
+#else
+		net.workspace = calloc(1, workspace_size);
+#endif
+	}
+	LAYER_TYPE lt = net.layers[net.n - 1].type;
+	if ((net.w % 32 != 0 || net.h % 32 != 0) && (lt == YOLO || lt == REGION || lt == DETECTION)) {
+		printf("\n Warning: width=%d and height=%d in cfg-file must be divisible by 32 for default networks Yolo v1/v2/v3!!! \n\n",
+			net.w, net.h);
+	}
+	return net;
+}
+
 network parse_network_cfg_custom(char *filename, int batch)
 {
     list *sections = read_cfg(filename);
-    node *n = sections->front;
-    if(!n) error("Config file has no sections");
-    network net = make_network(sections->size - 1);
-    net.gpu_index = gpu_index;
-    size_params params;
-
-    section *s = (section *)n->val;
-    list *options = s->options;
-    if(!is_network(s)) error("First section must be [net] or [network]");
-    parse_net_options(options, &net);
-
-    params.h = net.h;
-    params.w = net.w;
-    params.c = net.c;
-    params.inputs = net.inputs;
-    if (batch > 0) net.batch = batch;
-    params.batch = net.batch;
-    params.time_steps = net.time_steps;
-    params.net = net;
-	printf("gpu_index: %d, batch: %d\n", gpu_index, net.batch);
-
-    float bflops = 0;
-    size_t workspace_size = 0;
-    n = n->next;
-    int count = 0;
-    free_section(s);
-    fprintf(stderr, "layer     filters    size              input                output\n");
-    while(n){
-        params.index = count;
-        fprintf(stderr, "%4d ", count);
-        s = (section *)n->val;
-        options = s->options;
-        layer l = {0};
-        LAYER_TYPE lt = string_to_layer_type(s->type);
-        if(lt == CONVOLUTIONAL){
-            l = parse_convolutional(options, params);
-        }else if(lt == LOCAL){
-            l = parse_local(options, params);
-        }else if(lt == ACTIVE){
-            l = parse_activation(options, params);
-        }else if(lt == RNN){
-            l = parse_rnn(options, params);
-        }else if(lt == GRU){
-            l = parse_gru(options, params);
-        }else if(lt == CRNN){
-            l = parse_crnn(options, params);
-        }else if(lt == CONNECTED){
-            l = parse_connected(options, params);
-        }else if(lt == CROP){
-            l = parse_crop(options, params);
-        }else if(lt == COST){
-            l = parse_cost(options, params);
-        }else if(lt == REGION){
-            l = parse_region(options, params);
-        }else if (lt == YOLO) {
-            l = parse_yolo(options, params);
-        }else if(lt == DETECTION){
-            l = parse_detection(options, params);
-        }else if(lt == SOFTMAX){
-            l = parse_softmax(options, params);
-            net.hierarchy = l.softmax_tree;
-        }else if(lt == NORMALIZATION){
-            l = parse_normalization(options, params);
-        }else if(lt == BATCHNORM){
-            l = parse_batchnorm(options, params);
-        }else if(lt == MAXPOOL){
-            l = parse_maxpool(options, params);
-        }else if(lt == REORG){
-            l = parse_reorg(options, params);        }
-        else if (lt == REORG_OLD) {
-            l = parse_reorg_old(options, params);
-        }else if(lt == AVGPOOL){
-            l = parse_avgpool(options, params);
-        }else if(lt == ROUTE){
-            l = parse_route(options, params, net);
-        }else if (lt == UPSAMPLE) {
-            l = parse_upsample(options, params, net);
-        }else if(lt == SHORTCUT){
-            l = parse_shortcut(options, params, net);
-        }else if(lt == DROPOUT){
-            l = parse_dropout(options, params);
-            l.output = net.layers[count-1].output;
-            l.delta = net.layers[count-1].delta;
-#ifdef GPU
-            l.output_gpu = net.layers[count-1].output_gpu;
-            l.delta_gpu = net.layers[count-1].delta_gpu;
-#endif
-        }else{
-            fprintf(stderr, "Type not recognized: %s\n", s->type);
-        }
-        l.onlyforward = option_find_int_quiet(options, "onlyforward", 0);
-        l.stopbackward = option_find_int_quiet(options, "stopbackward", 0);
-        l.dontload = option_find_int_quiet(options, "dontload", 0);
-        l.dontloadscales = option_find_int_quiet(options, "dontloadscales", 0);
-        option_unused(options);
-        net.layers[count] = l;
-        if (l.workspace_size > workspace_size) workspace_size = l.workspace_size;
-        free_section(s);
-        n = n->next;
-        ++count;
-        if(n){
-            params.h = l.out_h;
-            params.w = l.out_w;
-            params.c = l.out_c;
-            params.inputs = l.outputs;
-        }
-        if (l.bflops > 0) bflops += l.bflops;
-    }
-    free_list(sections);
-    net.outputs = get_network_output_size(net);
-    net.output = get_network_output(net);
-    printf("Total BFLOPS %5.3f \n", bflops);
-    if(workspace_size){
-        //printf("%ld\n", workspace_size);
-#ifdef GPU
-        if(gpu_index >= 0){
-            net.workspace = cuda_make_array(0, workspace_size/sizeof(float) + 1);
-        }else {
-            net.workspace = calloc(1, workspace_size);
-        }
-#else
-        net.workspace = calloc(1, workspace_size);
-#endif
-    }
-    LAYER_TYPE lt = net.layers[net.n - 1].type;
-    if ((net.w % 32 != 0 || net.h % 32 != 0) && (lt == YOLO || lt == REGION || lt == DETECTION)) {
-        printf("\n Warning: width=%d and height=%d in cfg-file must be divisible by 32 for default networks Yolo v1/v2/v3!!! \n\n",
-            net.w, net.h);
-    }
-    return net;
+	return parse_network_sections(sections, batch);
 }
 
+network parse_network_cfg_custom_file(FILE *fp, int batch)
+{
+	list *sections = read_cfg_file(fp);
+	return parse_network_sections(sections, batch);
+}
 
+list *read_cfg_file(FILE *file)
+{
+	char *line;
+	int nu = 0;
+	list *sections = make_list();
+	section *current = 0;
+	while ((line = fgetl(file)) != 0) {
+		++nu;
+		strip(line);
+		switch (line[0]) {
+		case '[':
+			current = malloc(sizeof(section));
+			list_insert(sections, current);
+			current->options = make_list();
+			current->type = line;
+			break;
+		case '\0':
+		case '#':
+		case ';':
+			free(line);
+			break;
+		default:
+			if (!read_option(line, current->options)) {
+				fprintf(stderr, "Config file error line %d, could parse: %s\n", nu, line);
+				free(line);
+			}
+			break;
+		}
+	}
+	return sections;
+}
 
 list *read_cfg(char *filename)
 {
     FILE *file = fopen(filename, "r");
     if(file == 0) file_error(filename);
-    char *line;
-    int nu = 0;
-    list *sections = make_list();
-    section *current = 0;
-    while((line=fgetl(file)) != 0){
-        ++ nu;
-        strip(line);
-        switch(line[0]){
-            case '[':
-                current = malloc(sizeof(section));
-                list_insert(sections, current);
-                current->options = make_list();
-                current->type = line;
-                break;
-            case '\0':
-            case '#':
-            case ';':
-                free(line);
-                break;
-            default:
-                if(!read_option(line, current->options)){
-                    fprintf(stderr, "Config file error line %d, could parse: %s\n", nu, line);
-                    free(line);
-                }
-                break;
-        }
-    }
+	list *sections = read_cfg_file(file);
     fclose(file);
     return sections;
 }
@@ -956,63 +995,84 @@ void save_connected_weights(layer l, FILE *fp)
     }
 }
 
-void save_weights_upto(network net, char *filename, int cutoff)
+void save_weights_cfgbuf(network net, char *filename, const char *cfgbuf, size_t cfgsize)
+{
+	save_weights_cfgbuf_upto(net, filename, net.n, cfgbuf, cfgsize);
+}
+
+void save_weights_cfgbuf_upto(network net, char *filename, int cutoff, const char *cfgbuf, size_t cfgsize)
 {
 #ifdef GPU
-    if(net.gpu_index >= 0){
-        cuda_set_device(net.gpu_index);
-    }
+	if (net.gpu_index >= 0) {
+		cuda_set_device(net.gpu_index);
+	}
 #endif
-    fprintf(stderr, "Saving weights to %s\n", filename);
-    FILE *fp = fopen(filename, "wb");
-    if(!fp) file_error(filename);
+	fprintf(stderr, "Saving weights to %s\n", filename);
+	FILE *fp = fopen(filename, "wb");
+	if (!fp) file_error(filename);
 
-    int major = 0;
-    int minor = 1;
-    int revision = 0;
-    fwrite(&major, sizeof(int), 1, fp);
-    fwrite(&minor, sizeof(int), 1, fp);
-    fwrite(&revision, sizeof(int), 1, fp);
-    fwrite(net.seen, sizeof(int), 1, fp);
+	int major = 0;
+	int minor = 1;
+	int revision = 0;
+	fwrite(&major, sizeof(int), 1, fp);
+	fwrite(&minor, sizeof(int), 1, fp);
+	fwrite(&revision, sizeof(int), 1, fp);
+	fwrite(net.seen, sizeof(int), 1, fp);
 
-    int i;
-    for(i = 0; i < net.n && i < cutoff; ++i){
-        layer l = net.layers[i];
-        if(l.type == CONVOLUTIONAL){
-            save_convolutional_weights(l, fp);
-        } if(l.type == CONNECTED){
-            save_connected_weights(l, fp);
-        } if(l.type == BATCHNORM){
-            save_batchnorm_weights(l, fp);
-        } if(l.type == RNN){
-            save_connected_weights(*(l.input_layer), fp);
-            save_connected_weights(*(l.self_layer), fp);
-            save_connected_weights(*(l.output_layer), fp);
-        } if(l.type == GRU){
-            save_connected_weights(*(l.input_z_layer), fp);
-            save_connected_weights(*(l.input_r_layer), fp);
-            save_connected_weights(*(l.input_h_layer), fp);
-            save_connected_weights(*(l.state_z_layer), fp);
-            save_connected_weights(*(l.state_r_layer), fp);
-            save_connected_weights(*(l.state_h_layer), fp);
-        } if(l.type == CRNN){
-            save_convolutional_weights(*(l.input_layer), fp);
-            save_convolutional_weights(*(l.self_layer), fp);
-            save_convolutional_weights(*(l.output_layer), fp);
-        } if(l.type == LOCAL){
+	int i;
+	for (i = 0; i < net.n && i < cutoff; ++i) {
+		layer l = net.layers[i];
+		if (l.type == CONVOLUTIONAL) {
+			save_convolutional_weights(l, fp);
+		} if (l.type == CONNECTED) {
+			save_connected_weights(l, fp);
+		} if (l.type == BATCHNORM) {
+			save_batchnorm_weights(l, fp);
+		} if (l.type == RNN) {
+			save_connected_weights(*(l.input_layer), fp);
+			save_connected_weights(*(l.self_layer), fp);
+			save_connected_weights(*(l.output_layer), fp);
+		} if (l.type == GRU) {
+			save_connected_weights(*(l.input_z_layer), fp);
+			save_connected_weights(*(l.input_r_layer), fp);
+			save_connected_weights(*(l.input_h_layer), fp);
+			save_connected_weights(*(l.state_z_layer), fp);
+			save_connected_weights(*(l.state_r_layer), fp);
+			save_connected_weights(*(l.state_h_layer), fp);
+		} if (l.type == CRNN) {
+			save_convolutional_weights(*(l.input_layer), fp);
+			save_convolutional_weights(*(l.self_layer), fp);
+			save_convolutional_weights(*(l.output_layer), fp);
+		} if (l.type == LOCAL) {
 #ifdef GPU
-            if(gpu_index >= 0){
-                pull_local_layer(l);
-            }
+			if (gpu_index >= 0) {
+				pull_local_layer(l);
+			}
 #endif
-            int locations = l.out_w*l.out_h;
-            int size = l.size*l.size*l.c*l.n*locations;
-            fwrite(l.biases, sizeof(float), l.outputs, fp);
-            fwrite(l.weights, sizeof(float), size, fp);
-        }
-    }
-    fclose(fp);
+			int locations = l.out_w*l.out_h;
+			int size = l.size*l.size*l.c*l.n*locations;
+			fwrite(l.biases, sizeof(float), l.outputs, fp);
+			fwrite(l.weights, sizeof(float), size, fp);
+		}
+	}
+
+	if (cfgbuf && cfgsize > 0)
+	{
+		// use revision to save weight file size
+		int file_size = ftell(fp);
+		fseek(fp, sizeof(int) * 2, SEEK_SET);
+		fwrite(&file_size, sizeof(int), 1, fp);
+		fseek(fp, file_size, SEEK_SET);
+		fwrite(cfgbuf, 1, cfgsize, fp);
+	}
+	fclose(fp);
 }
+
+void save_weights_upto(network net, char *filename, int cutoff)
+{
+	save_weights_cfgbuf_upto(net, filename, cutoff, 0, 0);
+}
+
 void save_weights(network net, char *filename)
 {
     save_weights_upto(net, filename, net.n);
@@ -1142,6 +1202,71 @@ void load_convolutional_weights(layer l, FILE *fp)
 #endif
 }
 
+void load_weights_upto_file(network *net, FILE *fp, int cutoff)
+{
+	int major;
+	int minor;
+	int revision;
+	fread(&major, sizeof(int), 1, fp);
+	fread(&minor, sizeof(int), 1, fp);
+	fread(&revision, sizeof(int), 1, fp);
+	if ((major * 10 + minor) >= 2) {
+		printf("\n seen 64 \n");
+		uint64_t iseen = 0;
+		fread(&iseen, sizeof(uint64_t), 1, fp);
+		*net->seen = iseen;
+	}
+	else {
+		printf("\n seen 32 \n");
+		fread(net->seen, sizeof(int), 1, fp);
+	}
+	int transpose = (major > 1000) || (minor > 1000);
+
+	int i;
+	for (i = 0; i < net->n && i < cutoff; ++i) {
+		layer l = net->layers[i];
+		if (l.dontload) continue;
+		if (l.type == CONVOLUTIONAL) {
+			load_convolutional_weights(l, fp);
+		}
+		if (l.type == CONNECTED) {
+			load_connected_weights(l, fp, transpose);
+		}
+		if (l.type == BATCHNORM) {
+			load_batchnorm_weights(l, fp);
+		}
+		if (l.type == CRNN) {
+			load_convolutional_weights(*(l.input_layer), fp);
+			load_convolutional_weights(*(l.self_layer), fp);
+			load_convolutional_weights(*(l.output_layer), fp);
+		}
+		if (l.type == RNN) {
+			load_connected_weights(*(l.input_layer), fp, transpose);
+			load_connected_weights(*(l.self_layer), fp, transpose);
+			load_connected_weights(*(l.output_layer), fp, transpose);
+		}
+		if (l.type == GRU) {
+			load_connected_weights(*(l.input_z_layer), fp, transpose);
+			load_connected_weights(*(l.input_r_layer), fp, transpose);
+			load_connected_weights(*(l.input_h_layer), fp, transpose);
+			load_connected_weights(*(l.state_z_layer), fp, transpose);
+			load_connected_weights(*(l.state_r_layer), fp, transpose);
+			load_connected_weights(*(l.state_h_layer), fp, transpose);
+		}
+		if (l.type == LOCAL) {
+			int locations = l.out_w*l.out_h;
+			int size = l.size*l.size*l.c*l.n*locations;
+			fread(l.biases, sizeof(float), l.outputs, fp);
+			fread(l.weights, sizeof(float), size, fp);
+#ifdef GPU
+			if (gpu_index >= 0) {
+				push_local_layer(l);
+			}
+#endif
+		}
+	}
+}
+
 
 void load_weights_upto(network *net, char *filename, int cutoff)
 {
@@ -1154,68 +1279,7 @@ void load_weights_upto(network *net, char *filename, int cutoff)
     fflush(stdout);
     FILE *fp = fopen(filename, "rb");
     if(!fp) file_error(filename);
-
-    int major;
-    int minor;
-    int revision;
-    fread(&major, sizeof(int), 1, fp);
-    fread(&minor, sizeof(int), 1, fp);
-    fread(&revision, sizeof(int), 1, fp);
-    if ((major * 10 + minor) >= 2) {
-        printf("\n seen 64 \n");
-        uint64_t iseen = 0;
-        fread(&iseen, sizeof(uint64_t), 1, fp);
-        *net->seen = iseen;
-    }
-    else {
-        printf("\n seen 32 \n");
-        fread(net->seen, sizeof(int), 1, fp);
-    }
-    int transpose = (major > 1000) || (minor > 1000);
-
-    int i;
-    for(i = 0; i < net->n && i < cutoff; ++i){
-        layer l = net->layers[i];
-        if (l.dontload) continue;
-        if(l.type == CONVOLUTIONAL){
-            load_convolutional_weights(l, fp);
-        }
-        if(l.type == CONNECTED){
-            load_connected_weights(l, fp, transpose);
-        }
-        if(l.type == BATCHNORM){
-            load_batchnorm_weights(l, fp);
-        }
-        if(l.type == CRNN){
-            load_convolutional_weights(*(l.input_layer), fp);
-            load_convolutional_weights(*(l.self_layer), fp);
-            load_convolutional_weights(*(l.output_layer), fp);
-        }
-        if(l.type == RNN){
-            load_connected_weights(*(l.input_layer), fp, transpose);
-            load_connected_weights(*(l.self_layer), fp, transpose);
-            load_connected_weights(*(l.output_layer), fp, transpose);
-        }
-        if(l.type == GRU){
-            load_connected_weights(*(l.input_z_layer), fp, transpose);
-            load_connected_weights(*(l.input_r_layer), fp, transpose);
-            load_connected_weights(*(l.input_h_layer), fp, transpose);
-            load_connected_weights(*(l.state_z_layer), fp, transpose);
-            load_connected_weights(*(l.state_r_layer), fp, transpose);
-            load_connected_weights(*(l.state_h_layer), fp, transpose);
-        }
-        if(l.type == LOCAL){
-            int locations = l.out_w*l.out_h;
-            int size = l.size*l.size*l.c*l.n*locations;
-            fread(l.biases, sizeof(float), l.outputs, fp);
-            fread(l.weights, sizeof(float), size, fp);
-#ifdef GPU
-            if(gpu_index >= 0){
-                push_local_layer(l);
-            }
-#endif
-        }
-    }
+	load_weights_upto_file(net, fp, cutoff);
     fprintf(stderr, "Done!\n");
     fclose(fp);
 }

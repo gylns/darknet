@@ -48,6 +48,32 @@ network *load_network(char *cfg, char *weights, int clear)
     return load_network_custom(cfg, weights, clear, 0);
 }
 
+network *load_network_custom_one(char *cfg_weights, int clear, int batch)
+{
+	printf(" Try to load cfg_weights: %s, clear = %d \n", cfg_weights, clear);
+	network *net = calloc(1, sizeof(network));
+	FILE *fp = fopen(cfg_weights, "rb");
+	if (fp == NULL) return 0;
+	
+	int weights_size = 0;
+	fseek(fp, sizeof(int) * 2, SEEK_SET);
+	fread(&weights_size, sizeof(int), 1, fp);
+	if (weights_size <= 0) return 0;
+
+	// read cfg
+	fseek(fp, weights_size, SEEK_SET);
+	*net = parse_network_cfg_custom_file(fp, batch);
+	fseek(fp, 0, SEEK_SET);
+	load_weights_upto_file(net, fp, net->n);
+	if (clear) (*net->seen) = 0;
+	return net;
+}
+
+network *load_network_one(char *cfg_weights, int clear)
+{
+	return load_network_custom_one(cfg_weights, clear, 0);
+}
+
 int get_current_batch(network net)
 {
     int batch_num = (*net.seen)/(net.batch*net.subdivisions);
@@ -547,6 +573,11 @@ float *network_predict(network net, float *input)
     forward_network(net, state);
     float *out = get_network_output(net);
     return out;
+}
+
+float *network_predict_p(network *net, float *input)
+{
+	return network_predict(*net, input);
 }
 
 int num_detections(network *net, float thresh)

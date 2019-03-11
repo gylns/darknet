@@ -410,6 +410,30 @@ char *fgetl(FILE *fp)
     return line;
 }
 
+char *mgetl(char * *buf)
+{
+	if (strlen(*buf) == 0) return 0;
+
+	char *line = NULL;
+	size_t len = 0;
+
+	char *curr = strchr(*buf, '\n');
+	if (curr) {
+		len = curr - *buf;
+		if (len > 0 && curr[-1] == '\r')
+			len--;
+		curr += 1;
+	}
+	else {
+		len = strlen(*buf);
+		curr = *buf + len;
+	}
+	line = calloc(len + 1, 1);
+	memcpy(line, *buf, len);
+	*buf = curr;
+	return line;
+}
+
 int read_int(int fd)
 {
     int n = 0;

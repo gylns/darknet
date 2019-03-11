@@ -143,6 +143,8 @@ YOLODLL_API detection *make_network_boxes_batch(network *net, int b, float thres
 YOLODLL_API void free_detections(detection *dets, int n);
 YOLODLL_API void reset_rnn(network *net);
 YOLODLL_API network *load_network_custom(char *cfg, char *weights, int clear, int batch);
+YOLODLL_API network *load_network_custom_mem(char *cfg_buffer, char *weight_buffer, int clear, int batch);
+YOLODLL_API network *load_network_custom_one(char *cfg_weights, int clear, int batch);
 YOLODLL_API network *load_network(char *cfg, char *weights, int clear);
 YOLODLL_API float *network_predict_image(network *net, image im);
 YOLODLL_API void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, int ngpus, int clear, int dont_show);

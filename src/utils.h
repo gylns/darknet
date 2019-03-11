@@ -51,6 +51,7 @@ void strip_char(char *s, char bad);
 YOLODLL_API void top_k(float *a, int n, int k, int *index);
 list *split_str(char *s, char delim);
 char *fgetl(FILE *fp);
+char *mgetl(char * *buf);
 list *parse_csv_line(char *line);
 char *copy_string(char *s);
 int count_fields(char *line);

@@ -31,6 +31,7 @@
 #include "upsample_layer.h"
 #include "parser.h"
 
+/* 从配置文件和权重文件中加载网络 */
 network *load_network_custom(char *cfg, char *weights, int clear, int batch)
 {
     printf(" Try to load cfg: %s, weights: %s, clear = %d \n", cfg, weights, clear);
@@ -43,11 +44,24 @@ network *load_network_custom(char *cfg, char *weights, int clear, int batch)
     return net;
 }
 
+network *load_network_custom_mem(char *cfg_buffer, char *weight_buffer, int clear, int batch)
+{
+	printf(" Try to load cfg, weights, clear = %d \n", clear);
+	network *net = calloc(1, sizeof(network));
+	*net = parse_network_cfg_custom_mem(cfg_buffer, batch);
+	if (weight_buffer) {
+		load_weights_mem(net, weight_buffer);
+	}
+	if (clear) (*net->seen) = 0;
+	return net;
+}
+
 network *load_network(char *cfg, char *weights, int clear)
 {
     return load_network_custom(cfg, weights, clear, 0);
 }
 
+/* 从权重(包含配置文件)文件加载网络 */
 network *load_network_custom_one(char *cfg_weights, int clear, int batch)
 {
 	printf(" Try to load cfg_weights: %s, clear = %d \n", cfg_weights, clear);
@@ -55,14 +69,17 @@ network *load_network_custom_one(char *cfg_weights, int clear, int batch)
 	FILE *fp = fopen(cfg_weights, "rb");
 	if (fp == NULL) return 0;
 	
+	/* 读取权重的大小 */
 	int weights_size = 0;
 	fseek(fp, sizeof(int) * 2, SEEK_SET);
 	fread(&weights_size, sizeof(int), 1, fp);
 	if (weights_size <= 0) return 0;
 
-	// read cfg
+	/* 从文件后面读取网络配置 */
 	fseek(fp, weights_size, SEEK_SET);
 	*net = parse_network_cfg_custom_file(fp, batch);
+
+	/* 调到文件开头加载权重 */
 	fseek(fp, 0, SEEK_SET);
 	load_weights_upto_file(net, fp, net->n);
 	if (clear) (*net->seen) = 0;

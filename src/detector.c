@@ -34,6 +34,8 @@ static int coco_ids[] = {1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,20,21,22,2
 void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, int ngpus, int clear, int dont_show)
 {
     list *options = read_data_cfg(datacfg);
+	char *imgdir = option_find_str(options, "imgdir", "data/imgdir");
+	char *labeldir = option_find_str(options, "labeldir", "data/labeldir");
     char *train_images = option_find_str(options, "train", "data/train.list");
     char *backup_directory = option_find_str(options, "backup", "/backup/");
 
@@ -42,6 +44,18 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
     printf("%s\n", base);
     float avg_loss = -1;
     network *nets = calloc(ngpus, sizeof(network));
+
+	char *cfgbuf = 0;
+	size_t cfgsize = 0;
+	if (cfgfile)
+	{
+		FILE *f = fopen(cfgfile, "rb");
+		fseek(f, 0, SEEK_END);
+		cfgsize = ftell(f);
+		cfgbuf = malloc(sizeof(char) * cfgsize);
+		fseek(f, 0, SEEK_SET);
+		fread(cfgbuf, 1, cfgsize, f);
+	}
 
     srand(time(0));
     int seed = rand();
@@ -79,7 +93,10 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
     int classes = l.classes;
     float jitter = l.jitter;
 
-    list *plist = get_paths(train_images);
+    list *plist = get_paths2(train_images, imgdir);
+
+	printf("Total number of images %d\n", plist->size);
+
     //int N = plist->size;
     char **paths = (char **)list_to_array(plist);
 
@@ -108,6 +125,7 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
     args.exposure = net.exposure;
     args.saturation = net.saturation;
     args.hue = net.hue;
+	args.labeldir = labeldir;
 
 #ifdef OPENCV
     args.threads = 3 * ngpus;
@@ -210,7 +228,7 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
 #endif
             char buff[256];
             sprintf(buff, "%s/%s_%d.weights", backup_directory, base, i);
-            save_weights(net, buff);
+            save_weights_cfgbuf(net, buff, cfgbuf, cfgsize);
         }
         free_data(train);
     }
@@ -227,6 +245,8 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
 #endif
 
     // free memory
+	free(cfgbuf);
+
     pthread_join(load_thread, 0);
     free_data(buffer);
 

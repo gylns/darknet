@@ -31,6 +31,7 @@ void shuffle(void *arr, size_t n, size_t size);
 void sorta_shuffle(void *arr, size_t n, size_t size, size_t sections);
 YOLODLL_API void free_ptrs(void **ptrs, int n);
 char *basecfg(char *cfgfile);
+void replace_dirname(char *path, char *dir);
 int alphanum_to_int(char c);
 char int_to_alphanum(int i);
 int read_int(int fd);
@@ -84,6 +85,7 @@ unsigned int random_gen();
 float random_float();
 float rand_uniform_strong(float min, float max);
 int int_index(int *a, int val, int n);
+list *get_file_list(list *l, const char *folder, const char *ext);
 
 #endif
 

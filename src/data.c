@@ -22,6 +22,22 @@ list *get_paths(char *filename)
     return lines;
 }
 
+list *get_paths2(char *filename, char *base_dir)
+{
+	char *dir;
+	FILE *file = fopen(filename, "r");
+	if (!file) file_error(filename);
+	list *lines = 0;
+	while ((dir = fgetl(file))) {
+		char folder[1024];
+		snprintf(folder, sizeof folder, "%s/%s", base_dir, dir);
+		lines = get_file_list(lines, folder, ".jpg");
+		lines = get_file_list(lines, folder, ".JPG");
+	}
+	fclose(file);
+	return lines;
+}
+
 /*
 char **get_random_paths_indexes(char **paths, int n, int m, int *indexes)
 {
@@ -298,11 +314,15 @@ void fill_truth_region(char *path, float *truth, int classes, int num_boxes, int
     free(boxes);
 }
 
-void fill_truth_detection(char *path, int num_boxes, float *truth, int classes, int flip, float dx, float dy, float sx, float sy,
+void fill_truth_detection(char *path, char *labeldir, int num_boxes, float *truth, int classes, int flip, float dx, float dy, float sx, float sy,
     int small_object, int net_w, int net_h)
 {
     char labelpath[4096];
     replace_image_to_label(path, labelpath);
+
+	if (labeldir) {
+		replace_dirname(labelpath, labeldir);
+	}
 
     int count = 0;
     int i;
@@ -733,7 +753,7 @@ data load_data_swag(char **paths, int n, int classes, float jitter)
 
 #include "http_stream.h"
 
-data load_data_detection(int n, char **paths, int m, int w, int h, int c, int boxes, int classes, int use_flip, float jitter, float hue, float saturation, float exposure, int small_object)
+data load_data_detection(int n, char **paths, char *labeldir, int m, int w, int h, int c, int boxes, int classes, int use_flip, float jitter, float hue, float saturation, float exposure, int small_object)
 {
     c = c ? c : 3;
     char **random_paths = get_random_paths(paths, n, m);
@@ -793,7 +813,7 @@ data load_data_detection(int n, char **paths, int m, int w, int h, int c, int bo
         //show_image(ai, "aug");
         //cvWaitKey(0);
 
-        fill_truth_detection(filename, boxes, d.y.vals[i], classes, flip, dx, dy, 1./sx, 1./sy, small_object, w, h);
+        fill_truth_detection(filename, labeldir, boxes, d.y.vals[i], classes, flip, dx, dy, 1./sx, 1./sy, small_object, w, h);
 
         cvReleaseImage(&src);
     }
@@ -801,7 +821,7 @@ data load_data_detection(int n, char **paths, int m, int w, int h, int c, int bo
     return d;
 }
 #else    // OPENCV
-data load_data_detection(int n, char **paths, int m, int w, int h, int c, int boxes, int classes, int use_flip, float jitter, float hue, float saturation, float exposure, int small_object)
+data load_data_detection(int n, char **paths, char *labeldir, int m, int w, int h, int c, int boxes, int classes, int use_flip, float jitter, float hue, float saturation, float exposure, int small_object)
 {
     c = c ? c : 3;
     char **random_paths = get_random_paths(paths, n, m);
@@ -845,7 +865,7 @@ data load_data_detection(int n, char **paths, int m, int w, int h, int c, int bo
         random_distort_image(sized, hue, saturation, exposure);
         d.X.vals[i] = sized.data;
 
-        fill_truth_detection(random_paths[i], boxes, d.y.vals[i], classes, flip, dx, dy, 1. / sx, 1. / sy, small_object, w, h);
+        fill_truth_detection(random_paths[i], labeldir, boxes, d.y.vals[i], classes, flip, dx, dy, 1. / sx, 1. / sy, small_object, w, h);
 
         free_image(orig);
         free_image(cropped);
@@ -875,7 +895,7 @@ void *load_thread(void *ptr)
     } else if (a.type == REGION_DATA){
         *a.d = load_data_region(a.n, a.paths, a.m, a.w, a.h, a.num_boxes, a.classes, a.jitter, a.hue, a.saturation, a.exposure);
     } else if (a.type == DETECTION_DATA){
-        *a.d = load_data_detection(a.n, a.paths, a.m, a.w, a.h, a.c, a.num_boxes, a.classes, a.flip, a.jitter, a.hue, a.saturation, a.exposure, a.small_object);
+        *a.d = load_data_detection(a.n, a.paths, a.labeldir, a.m, a.w, a.h, a.c, a.num_boxes, a.classes, a.flip, a.jitter, a.hue, a.saturation, a.exposure, a.small_object);
     } else if (a.type == SWAG_DATA){
         *a.d = load_data_swag(a.paths, a.n, a.classes, a.jitter);
     } else if (a.type == COMPARE_DATA){

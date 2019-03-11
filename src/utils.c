@@ -13,6 +13,7 @@
 #include <sys/time.h>
 #endif
 #include "utils.h"
+#include "dirent.h"
 
 #pragma warning(disable: 4996)
 
@@ -144,6 +145,21 @@ char *basecfg(char *cfgfile)
     return c;
 }
 
+void replace_dirname(char *path, char *dir)
+{
+	char buf[4096];
+	strcpy(buf, path);
+
+	char *c = buf;
+	char *next;
+	while ((next = strchr(c, '/')))
+	{
+		c = next + 1;
+	}
+	if (!next) while ((next = strchr(c, '\\'))) { c = next + 1; }
+	sprintf(path, "%s/%s", dir, c);
+}
+
 int alphanum_to_int(char c)
 {
     return (c < 58) ? c - 48 : c-87;
@@ -211,6 +227,13 @@ void find_replace_extension(char *str, char *orig, char *rep, char *output)
     char *p = strstr(buffer, orig);
     int offset = (p - buffer);
     int chars_from_end = strlen(buffer) - offset;
+	
+	while (p && chars_from_end != strlen(orig)) {
+		p = strstr(p + 1, orig);
+		offset = (p - buffer);
+		chars_from_end = strlen(buffer) - offset;
+	}
+
     if (!p || chars_from_end != strlen(orig)) {  // Is 'orig' even in 'str' AND is 'orig' found at the end of 'str'?
         sprintf(output, "%s", str);
         free(buffer);
@@ -763,4 +786,41 @@ float rand_uniform_strong(float min, float max)
         max = swap;
     }
     return (random_float() * (max - min)) + min;
+}
+
+list *get_file_list(list *l, const char *folder, const char *ext)
+{
+	if (!l)
+		l = make_list();
+	list *dl = make_list();
+
+	list_insert(dl, strdup(folder));
+	char *d;
+	while ((d = list_pop(dl)) != NULL)
+	{
+		DIR *dir = opendir(d);
+		if (dir)
+		{
+			struct dirent *ent;
+			while ((ent = readdir(dir)) != NULL)
+			{
+				char tmp[256];
+				snprintf(tmp, sizeof(tmp), "%s/%s", d, ent->d_name);
+				if (ent->d_type == DT_DIR)
+				{
+					if (strcmp(ent->d_name, ".") && strcmp(ent->d_name, ".."))
+						list_insert(dl, strdup(tmp));
+				}
+				else if (ent->d_type == DT_REG)
+				{
+					if (!ext || strstr(ent->d_name, ext))
+						list_insert(l, strdup(tmp));
+				}
+			}
+			closedir(dir);
+		}
+		free(d);
+	}
+	free_list(dl);
+	return l;
 }

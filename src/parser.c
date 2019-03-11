@@ -699,14 +699,13 @@ network parse_network_cfg(char *filename)
     return parse_network_cfg_custom(filename, 0);
 }
 
-network parse_network_cfg_custom(char *filename, int batch)
+network parse_network_sections(list *sections, int batch)
 {
-    list *sections = read_cfg(filename);
-    node *n = sections->front;
-    if(!n) error("Config file has no sections");
-    network net = make_network(sections->size - 1);
-    net.gpu_index = gpu_index;
-    size_params params;
+	node *n = sections->front;
+	if (!n) error("Config file has no sections");
+	network net = make_network(sections->size - 1);
+	net.gpu_index = gpu_index;
+	size_params params;
 
     section *s = (section *)n->val;
     list *options = s->options;
@@ -834,12 +833,18 @@ network parse_network_cfg_custom(char *filename, int batch)
     return net;
 }
 
-
-
-list *read_cfg(char *filename)
+network parse_network_cfg_custom(char *filename, int batch)
 {
-    FILE *file = fopen(filename, "r");
-    if(file == 0) file_error(filename);
+    list *sections = read_cfg(filename);
+	return parse_network_sections(sections, batch);
+}
+network parse_network_cfg_custom_file(FILE *fp, int batch)
+{
+	list *sections = read_cfg_file(fp);
+	return parse_network_sections(sections, batch);
+}
+list *read_cfg_file(FILE *file)
+{
     char *line;
     int nu = 0;
     list *sections = make_list();
@@ -867,6 +872,13 @@ list *read_cfg(char *filename)
                 break;
         }
     }
+	return sections;
+}
+list *read_cfg(char *filename)
+{
+    FILE *file = fopen(filename, "r");
+    if(file == 0) file_error(filename);
+	list *sections = read_cfg_file(file);
     fclose(file);
     return sections;
 }
@@ -956,7 +968,12 @@ void save_connected_weights(layer l, FILE *fp)
     }
 }
 
-void save_weights_upto(network net, char *filename, int cutoff)
+void save_weights_cfgbuf(network net, char *filename, const char *cfgbuf, size_t cfgsize)
+{
+	save_weights_cfgbuf_upto(net, filename, net.n, cfgbuf, cfgsize);
+}
+
+void save_weights_cfgbuf_upto(network net, char *filename, int cutoff, const char *cfgbuf, size_t cfgsize)
 {
 #ifdef GPU
     if(net.gpu_index >= 0){
@@ -1011,7 +1028,21 @@ void save_weights_upto(network net, char *filename, int cutoff)
             fwrite(l.weights, sizeof(float), size, fp);
         }
     }
+	if (cfgbuf && cfgsize > 0)
+	{
+		// use revision to save weight file size
+		int file_size = ftell(fp);
+		fseek(fp, sizeof(int) * 2, SEEK_SET);
+		fwrite(&file_size, sizeof(int), 1, fp);
+		fseek(fp, file_size, SEEK_SET);
+		fwrite(cfgbuf, 1, cfgsize, fp);
+	}
     fclose(fp);
+}
+
+void save_weights_upto(network net, char *filename, int cutoff)
+{
+	save_weights_cfgbuf_upto(net, filename, cutoff, 0, 0);
 }
 void save_weights(network net, char *filename)
 {
@@ -1142,36 +1173,25 @@ void load_convolutional_weights(layer l, FILE *fp)
 #endif
 }
 
-
-void load_weights_upto(network *net, char *filename, int cutoff)
+void load_weights_upto_file(network *net, FILE *fp, int cutoff)
 {
-#ifdef GPU
-    if(net->gpu_index >= 0){
-        cuda_set_device(net->gpu_index);
-    }
-#endif
-    fprintf(stderr, "Loading weights from %s...", filename);
-    fflush(stdout);
-    FILE *fp = fopen(filename, "rb");
-    if(!fp) file_error(filename);
-
-    int major;
-    int minor;
-    int revision;
-    fread(&major, sizeof(int), 1, fp);
-    fread(&minor, sizeof(int), 1, fp);
-    fread(&revision, sizeof(int), 1, fp);
-    if ((major * 10 + minor) >= 2) {
-        printf("\n seen 64 \n");
-        uint64_t iseen = 0;
-        fread(&iseen, sizeof(uint64_t), 1, fp);
-        *net->seen = iseen;
-    }
-    else {
-        printf("\n seen 32 \n");
-        fread(net->seen, sizeof(int), 1, fp);
-    }
-    int transpose = (major > 1000) || (minor > 1000);
+	int major;
+	int minor;
+	int revision;
+	fread(&major, sizeof(int), 1, fp);
+	fread(&minor, sizeof(int), 1, fp);
+	fread(&revision, sizeof(int), 1, fp);
+	if ((major * 10 + minor) >= 2) {
+		printf("\n seen 64 \n");
+		uint64_t iseen = 0;
+		fread(&iseen, sizeof(uint64_t), 1, fp);
+		*net->seen = iseen;
+	}
+	else {
+		printf("\n seen 32 \n");
+		fread(net->seen, sizeof(int), 1, fp);
+	}
+	int transpose = (major > 1000) || (minor > 1000);
 
     int i;
     for(i = 0; i < net->n && i < cutoff; ++i){
@@ -1216,6 +1236,21 @@ void load_weights_upto(network *net, char *filename, int cutoff)
 #endif
         }
     }
+}
+
+
+void load_weights_upto(network *net, char *filename, int cutoff)
+{
+#ifdef GPU
+    if(net->gpu_index >= 0){
+        cuda_set_device(net->gpu_index);
+    }
+#endif
+    fprintf(stderr, "Loading weights from %s...", filename);
+    fflush(stdout);
+    FILE *fp = fopen(filename, "rb");
+    if(!fp) file_error(filename);
+	load_weights_upto_file(net, fp, cutoff);
     fprintf(stderr, "Done!\n");
     fclose(fp);
 }

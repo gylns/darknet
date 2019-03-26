@@ -39,6 +39,7 @@ image resize_max(image im, int max);
 void translate_image(image m, float s);
 void normalize_image(image p);
 image rotate_image(image m, float rad);
+image rotate_image_c(image im, float rad, float cx, float cy);
 void rotate_image_cw(image im, int times);
 void embed_image(image source, image dest, int dx, int dy);
 void saturate_image(image im, float sat);

@@ -348,6 +348,11 @@ void visualize(char *cfgfile, char *weightfile)
 #endif
 }
 
+image ipl_to_image(IplImage* src);
+#include "opencv2/imgcodecs/imgcodecs_c.h"
+box_label *read_boxes_rot(char *filename, int *n, float rad, float s);
+box_label *read_boxes(char *filename, int *n);
+
 int main(int argc, char **argv)
 {
 #ifdef _DEBUG
@@ -360,7 +365,47 @@ int main(int argc, char **argv)
 		strip_args(argv[i]);
 	}
 
-    //test_resize("data/bad.jpg");
+	float rad = CV_PI / 6;
+	rad = 0;
+	char image_name[] = "1_20160614_162359000_P3.jpg";
+	char label_name[] = "1_20160614_162359000_P3.txt";
+
+	image im = load_image(image_name, 0, 0, 3);
+	int count = 0;
+	box_label *boxes = read_boxes(label_name, &count);
+	for (i = 0; i < count; i++) {
+		draw_box(im, im.w * boxes[i].left, im.h*boxes[i].top, im.w*boxes[i].right, im.h*boxes[i].bottom, 255, 0, 0);
+	}
+	show_image(im, "origin");
+	float s = im.w / (float)im.h;
+	image im_r = rotate_image(im, rad);
+	boxes = read_boxes_rot(label_name, &count, rad, s);
+	for (i = 0; i < count; i++) {
+		draw_box(im_r, im_r.w * boxes[i].left, im_r.h*boxes[i].top, im_r.w*boxes[i].right, im_r.h*boxes[i].bottom, 0, 255, 0);
+	}
+	show_image(im_r, "rotate");
+
+	IplImage *src = cvLoadImage(image_name, 1);
+	if (rad != 0) {
+		IplImage* dst = cvCreateImage(cvSize(src->width, src->height), IPL_DEPTH_8U, 3);
+		float buf[6];
+		CvMat M = cvMat(2, 3, CV_32F, buf);
+		cv2DRotationMatrix(cvPoint2D32f(src->width*0.5f, src->height*0.5f), rad / CV_PI * 180., 1.0, &M);
+		cvWarpAffine(src, dst, &M, CV_INTER_LINEAR + CV_WARP_FILL_OUTLIERS, cvScalarAll(0));
+		cvReleaseImage(&src);
+		src = dst;
+	}
+	image im_s = ipl_to_image(src);
+	rgbgr_image(im_s);
+	boxes = read_boxes_rot(label_name, &count, rad, s);
+	for (i = 0; i < count; i++) {
+		draw_box(im_s, im_s.w * boxes[i].left, im_s.h*boxes[i].top, im_s.w*boxes[i].right, im_s.h*boxes[i].bottom, 0, 255, 0);
+	}
+	show_image(im_s, "roate_s");
+	cvWaitKey(0);
+	return 0;
+
+    //test_resize("test.jpg");
     //test_box();
     //test_convolutional_layer();
     if(argc < 2){

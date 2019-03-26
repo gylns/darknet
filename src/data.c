@@ -189,6 +189,74 @@ box_label *read_boxes(char *filename, int *n)
     return boxes;
 }
 
+box_label *read_boxes_rot(char *filename, int *n, float rad, float s)
+{
+	box_label *boxes = calloc(1, sizeof(box_label));
+	FILE *file = fopen(filename, "r");
+	if (!file) {
+		printf("Can't open label file. (This can be normal only if you use MSCOCO) \n");
+		//file_error(filename);
+		FILE* fw = fopen("bad.list", "a");
+		fwrite(filename, sizeof(char), strlen(filename), fw);
+		char *new_line = "\n";
+		fwrite(new_line, sizeof(char), strlen(new_line), fw);
+		fclose(fw);
+
+		*n = 0;
+		return boxes;
+	}
+	float x, y, h, w;
+	int id;
+	int count = 0;
+	float l, t, r, b;
+	while (fscanf(file, "%d %f %f %f %f", &id, &x, &y, &w, &h) == 5) {
+		x *= s;
+		w *= s;
+		l = x - w / 2;
+		t = y - h / 2;
+
+		if (rad != 0.f) {
+			float rx[4], ry[4];
+			rx[0] = cos(rad)*(l - 0.5*s) + sin(rad)*(t - 0.5) + 0.5*s;
+			ry[0] = cos(rad)*(t - 0.5) - sin(rad)*(l - 0.5*s) + 0.5;
+			rx[1] = rx[0] + cos(rad)*w;
+			ry[1] = ry[0] - sin(rad)*w;
+			rx[2] = rx[1] + sin(rad)*h;
+			ry[2] = ry[1] + cos(rad)*h;
+			rx[3] = rx[0] + sin(rad)*h;
+			ry[3] = ry[0] + cos(rad)*h;
+
+			l = rx[0], t = ry[0];
+			r = rx[0], b = ry[0];
+			for (int i = 1; i < 4; i++) {
+				if (l > rx[i])
+					l = rx[i];
+				if (t > ry[i])
+					t = ry[i];
+				if (r < rx[i])
+					r = rx[i];
+				if (b < ry[i])
+					b = ry[i];
+			}
+		}
+		
+		boxes = realloc(boxes, (count + 1) * sizeof(box_label));
+		boxes[count].id = id;
+		boxes[count].x = (l + r)/2/s;
+		boxes[count].y = (t + b)/2;
+		boxes[count].h = (r - l)/2;
+		boxes[count].w = (b - t)/2/s;
+		boxes[count].left = l/s;
+		boxes[count].right = r/s;
+		boxes[count].top = t;
+		boxes[count].bottom = b;
+		++count;
+	}
+	fclose(file);
+	*n = count;
+	return boxes;
+}
+
 void randomize_boxes(box_label *b, int n)
 {
     int i;
@@ -403,6 +471,97 @@ void fill_truth_detection(char *path, char *labeldir, int num_boxes, float *trut
         truth[(i-sub)*5+4] = id;
     }
     free(boxes);
+}
+
+void fill_truth_detection_rot(char *path, char *labeldir, int num_boxes, float *truth, int classes, float rad, float s, int flip, float dx, float dy, float sx, float sy,
+	int small_object, int net_w, int net_h)
+{
+	char labelpath[4096];
+	replace_image_to_label(path, labelpath);
+
+	if (labeldir) {
+		replace_dirname(labelpath, labeldir);
+	}
+
+	int count = 0;
+	int i;
+	box_label *boxes = read_boxes_rot(labelpath, &count, rad, s);
+	float lowest_w = 1.F / net_w;
+	float lowest_h = 1.F / net_h;
+	if (small_object == 1) {
+		for (i = 0; i < count; ++i) {
+			if (boxes[i].w < lowest_w) boxes[i].w = lowest_w;
+			if (boxes[i].h < lowest_h) boxes[i].h = lowest_h;
+		}
+	}
+	randomize_boxes(boxes, count);
+	correct_boxes(boxes, count, dx, dy, sx, sy, flip);
+	if (count > num_boxes) count = num_boxes;
+	float x, y, w, h;
+	int id;
+	int sub = 0;
+
+	for (i = 0; i < count; ++i) {
+		x = boxes[i].x;
+		y = boxes[i].y;
+		w = boxes[i].w;
+		h = boxes[i].h;
+		id = boxes[i].id;
+
+		// not detect small objects
+		//if ((w < 0.001F || h < 0.001F)) continue;
+		// if truth (box for object) is smaller than 1x1 pix
+		char buff[256];
+		if (id >= classes) {
+			printf("\n Wrong annotation: class_id = %d. But class_id should be [from 0 to %d] \n", id, classes);
+			sprintf(buff, "echo %s \"Wrong annotation: class_id = %d. But class_id should be [from 0 to %d]\" >> bad_label.list", labelpath, id, classes);
+			system(buff);
+			getchar();
+			++sub;
+			continue;
+		}
+		if ((w < lowest_w || h < lowest_h)) {
+			//sprintf(buff, "echo %s \"Very small object: w < lowest_w OR h < lowest_h\" >> bad_label.list", labelpath);
+			//system(buff);
+			++sub;
+			continue;
+		}
+		if (x == 999999 || y == 999999) {
+			printf("\n Wrong annotation: x = 0, y = 0 \n");
+			sprintf(buff, "echo %s \"Wrong annotation: x = 0 or y = 0\" >> bad_label.list", labelpath);
+			system(buff);
+			++sub;
+			continue;
+		}
+		if (x <= 0 || x > 1 || y <= 0 || y > 1) {
+			printf("\n Wrong annotation: x = %f, y = %f \n", x, y);
+			sprintf(buff, "echo %s \"Wrong annotation: x = %f, y = %f\" >> bad_label.list", labelpath, x, y);
+			system(buff);
+			++sub;
+			continue;
+		}
+		if (w > 1) {
+			printf("\n Wrong annotation: w = %f \n", w);
+			sprintf(buff, "echo %s \"Wrong annotation: w = %f\" >> bad_label.list", labelpath, w);
+			system(buff);
+			w = 1;
+		}
+		if (h > 1) {
+			printf("\n Wrong annotation: h = %f \n", h);
+			sprintf(buff, "echo %s \"Wrong annotation: h = %f\" >> bad_label.list", labelpath, h);
+			system(buff);
+			h = 1;
+		}
+		if (x == 0) x += lowest_w;
+		if (y == 0) y += lowest_h;
+
+		truth[(i - sub) * 5 + 0] = x;
+		truth[(i - sub) * 5 + 1] = y;
+		truth[(i - sub) * 5 + 2] = w;
+		truth[(i - sub) * 5 + 3] = h;
+		truth[(i - sub) * 5 + 4] = id;
+	}
+	free(boxes);
 }
 
 #define NUMCHARS 37
@@ -820,6 +979,88 @@ data load_data_detection(int n, char **paths, char *labeldir, int m, int w, int 
     free(random_paths);
     return d;
 }
+
+data load_data_detection_rot(int n, char **paths, char *labeldir, int m, int w, int h, int c, float angle, int boxes, int classes, int use_flip, float jitter, float hue, float saturation, float exposure, int small_object)
+{
+	c = c ? c : 3;
+	char **random_paths = get_random_paths(paths, n, m);
+	int i;
+	data d = { 0 };
+	d.shallow = 0;
+
+	d.X.rows = n;
+	d.X.vals = calloc(d.X.rows, sizeof(float*));
+	d.X.cols = h*w*c;
+
+	d.y = make_matrix(n, 5 * boxes);
+	for (i = 0; i < n; ++i) {
+		const char *filename = random_paths[i];
+
+		int flag = (c >= 3);
+		IplImage *src;
+		if ((src = cvLoadImage(filename, flag)) == 0)
+		{
+			fprintf(stderr, "Cannot load image \"%s\"\n", filename);
+			char buff[256];
+			sprintf(buff, "echo %s >> bad.list", filename);
+			system(buff);
+			continue;
+			//exit(0);
+		}
+
+		float rad = rand_uniform(-angle, angle) * TWO_PI / 360.;
+
+		if (rad != 0.f) {
+			IplImage* dst = cvCreateImage(cvSize(src->width, src->height), IPL_DEPTH_8U, c);
+			float buf[6];
+			CvMat M = cvMat(2, 3, CV_32F, buf);
+			cv2DRotationMatrix(cvPoint2D32f(src->width*0.5f, src->height*0.5f), rad / CV_PI * 180., 1.0, &M);
+			cvWarpAffine(src, dst, &M, CV_INTER_LINEAR + CV_WARP_FILL_OUTLIERS, cvScalarAll(0));
+			cvReleaseImage(&src);
+			src = dst;
+		}
+
+		int oh = src->height;
+		int ow = src->width;
+
+		int dw = (ow*jitter);
+		int dh = (oh*jitter);
+
+		int pleft = rand_uniform_strong(-dw, dw);
+		int pright = rand_uniform_strong(-dw, dw);
+		int ptop = rand_uniform_strong(-dh, dh);
+		int pbot = rand_uniform_strong(-dh, dh);
+
+		int swidth = ow - pleft - pright;
+		int sheight = oh - ptop - pbot;
+
+		float sx = (float)swidth / ow;
+		float sy = (float)sheight / oh;
+
+		int flip = use_flip ? random_gen() % 2 : 0;
+
+		float dx = ((float)pleft / ow) / sx;
+		float dy = ((float)ptop / oh) / sy;
+
+		float dhue = rand_uniform_strong(-hue, hue);
+		float dsat = rand_scale(saturation);
+		float dexp = rand_scale(exposure);
+
+		image ai = image_data_augmentation(src, w, h, pleft, ptop, swidth, sheight, flip, jitter, dhue, dsat, dexp);
+		//rotate_image(ai, rad);
+		d.X.vals[i] = ai.data;
+
+		//show_image(ai, "aug");
+		//cvWaitKey(0);
+
+		fill_truth_detection_rot(filename, labeldir, boxes, d.y.vals[i], classes, rad, ow / (float)oh, flip, dx, dy, 1. / sx, 1. / sy, small_object, w, h);
+
+		cvReleaseImage(&src);
+	}
+	free(random_paths);
+	return d;
+}
+
 #else    // OPENCV
 data load_data_detection(int n, char **paths, char *labeldir, int m, int w, int h, int c, int boxes, int classes, int use_flip, float jitter, float hue, float saturation, float exposure, int small_object)
 {
@@ -895,7 +1136,7 @@ void *load_thread(void *ptr)
     } else if (a.type == REGION_DATA){
         *a.d = load_data_region(a.n, a.paths, a.m, a.w, a.h, a.num_boxes, a.classes, a.jitter, a.hue, a.saturation, a.exposure);
     } else if (a.type == DETECTION_DATA){
-        *a.d = load_data_detection(a.n, a.paths, a.labeldir, a.m, a.w, a.h, a.c, a.num_boxes, a.classes, a.flip, a.jitter, a.hue, a.saturation, a.exposure, a.small_object);
+		*a.d = load_data_detection_rot(a.n, a.paths, a.labeldir, a.m, a.w, a.h, a.c, a.angle, a.num_boxes, a.classes, a.flip, a.jitter, a.hue, a.saturation, a.exposure, a.small_object);
     } else if (a.type == SWAG_DATA){
         *a.d = load_data_swag(a.paths, a.n, a.classes, a.jitter);
     } else if (a.type == COMPARE_DATA){

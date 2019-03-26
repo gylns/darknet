@@ -1263,6 +1263,23 @@ image rotate_image(image im, float rad)
     return rot;
 }
 
+image rotate_image_c(image im, float rad, float cx, float cy)
+{
+	int x, y, c;
+	image rot = make_image(im.w, im.h, im.c);
+	for (c = 0; c < im.c; ++c) {
+		for (y = 0; y < im.h; ++y) {
+			for (x = 0; x < im.w; ++x) {
+				float rx = cos(rad)*(x - cx) - sin(rad)*(y - cy) + cx;
+				float ry = sin(rad)*(x - cx) + cos(rad)*(y - cy) + cy;
+				float val = bilinear_interpolate(im, rx, ry, c);
+				set_pixel(rot, x, y, c, val);
+			}
+		}
+	}
+	return rot;
+}
+
 void translate_image(image m, float s)
 {
     int i;
